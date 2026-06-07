@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SecureFeed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080a0d;
+    --surface: #0d1117;
+    --border: #1c2333;
+    --accent: #00ff88;
+    --accent-dim: rgba(0,255,136,0.12);
+    --red: #ff4444;
+    --yellow: #ffcc00;
+    --text: #c9d1d9;
+    --text-dim: #4a5568;
+    --mono: 'Share Tech Mono', monospace;
+    --sans: 'Barlow Condensed', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* Noise texture */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 999;
+    opacity: 0.4;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: relative;
+    z-index: 10;
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 18px;
+    color: var(--accent);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .logo-icon {
+    width: 28px; height: 28px;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    animation: pulse-ring 3s ease-in-out infinite;
+  }
+
+  @keyframes pulse-ring {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,255,136,0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(0,255,136,0); }
+  }
+
+  .logo-icon::after {
+    content: '';
+    width: 8px; height: 8px;
+    background: var(--accent);
+    border-radius: 50%;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  #clock {
+    color: var(--accent);
+    letter-spacing: 2px;
+  }
+
+  /* Status bar */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 28px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: background 0.3s;
+    flex-shrink: 0;
+  }
+  .status-dot.online { background: var(--accent); animation: blink 2s ease-in-out infinite; }
+  .status-dot.offline { background: var(--red); }
+  .status-dot.connecting { background: var(--yellow); animation: blink 0.8s ease-in-out infinite; }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  #status-text { color: var(--text); }
+  #status-detail { color: var(--text-dim); margin-left: 4px; }
+
+  /* Main layout */
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 0;
+    min-height: 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  @media (max-width: 768px) {
+    main { grid-template-columns: 1fr; }
+    .sidebar { display: none; }
+  }
+
+  /* Video section */
+  .video-section {
+    display: flex;
+    flex-direction: column;
+    padding: 24px;
+    gap: 16px;
+  }
+
+  .feed-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+
+  .rec-badge {
+    background: var(--red);
+    color: #fff;
+    font-size: 9px;
+    padding: 2px 6px;
+    letter-spacing: 1px;
+    border-radius: 2px;
+    display: none;
+    animation: blink 1s ease-in-out infinite;
+  }
+  .rec-badge.active { display: inline; }
+
+  /* Video wrapper */
+  .video-wrapper {
+    position: relative;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    aspect-ratio: 16/9;
+    max-height: calc(100vh - 280px);
+  }
+
+  .video-wrapper::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      to bottom,
+      rgba(0,255,136,0.03) 0%,
+      transparent 20%,
+      transparent 80%,
+      rgba(0,0,0,0.4) 100%
+    );
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  /* Corner decorations */
+  .corner {
+    position: absolute;
+    width: 20px; height: 20px;
+    z-index: 3;
+  }
+  .corner::before, .corner::after { content: ''; position: absolute; background: var(--accent); }
+  .corner.tl { top: 8px; left: 8px; }
+  .corner.tr { top: 8px; right: 8px; }
+  .corner.bl { bottom: 8px; left: 8px; }
+  .corner.br { bottom: 8px; right: 8px; }
+  .corner.tl::before { width: 2px; height: 14px; top: 0; left: 0; }
+  .corner.tl::after  { width: 14px; height: 2px; top: 0; left: 0; }
+  .corner.tr::before { width: 2px; height: 14px; top: 0; right: 0; }
+  .corner.tr::after  { width: 14px; height: 2px; top: 0; right: 0; }
+  .corner.bl::before { width: 2px; height: 14px; bottom: 0; left: 0; }
+  .corner.bl::after  { width: 14px; height: 2px; bottom: 0; left: 0; }
+  .corner.br::before { width: 2px; height: 14px; bottom: 0; right: 0; }
+  .corner.br::after  { width: 14px; height: 2px; bottom: 0; right: 0; }
+
+  #video {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+    background: #000;
+  }
+
+  /* Offline overlay */
+  .offline-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: rgba(8,10,13,0.9);
+    z-index: 5;
+    transition: opacity 0.4s;
+  }
+
+  .offline-overlay.hidden { opacity: 0; pointer-events: none; }
+
+  .offline-icon {
+    width: 64px; height: 64px;
+    border: 2px solid var(--text-dim);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px;
+    color: var(--text-dim);
+  }
+
+  .offline-text {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text-dim);
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  /* Connection button */
+  #connect-btn {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 12px 32px;
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.2s;
+    border-radius: 2px;
+  }
+
+  #connect-btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--accent);
+    transform: translateX(-100%);
+    transition: transform 0.2s;
+    z-index: -1;
+  }
+
+  #connect-btn:hover::before { transform: translateX(0); }
+  #connect-btn:hover { color: var(--bg); }
+  #connect-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Stats row */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 10px 14px;
+  }
+
+  .stat-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 16px;
+    color: var(--accent);
+    font-weight: 400;
+  }
+
+  .stat-value.warn { color: var(--yellow); }
+  .stat-value.bad  { color: var(--red); }
+
+  /* Sidebar */
+  .sidebar {
+    border-left: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-section {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  /* Log terminal */
+  .log-terminal {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.8;
+    background: var(--bg);
+  }
+
+  .log-terminal::-webkit-scrollbar { width: 4px; }
+  .log-terminal::-webkit-scrollbar-track { background: var(--bg); }
+  .log-terminal::-webkit-scrollbar-thumb { background: var(--border); }
+
+  .log-entry {
+    display: flex;
+    gap: 8px;
+    opacity: 0;
+    animation: fadeIn 0.3s forwards;
+  }
+
+  @keyframes fadeIn { to { opacity: 1; } }
+
+  .log-time { color: var(--text-dim); flex-shrink: 0; }
+  .log-msg.info  { color: var(--text); }
+  .log-msg.ok    { color: var(--accent); }
+  .log-msg.warn  { color: var(--yellow); }
+  .log-msg.error { color: var(--red); }
+
+  /* ICE state indicators */
+  .ice-states {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .ice-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+
+  .ice-label { color: var(--text-dim); }
+  .ice-val {
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    background: var(--border);
+    color: var(--text-dim);
+    transition: all 0.3s;
+  }
+  .ice-val.active { background: var(--accent-dim); color: var(--accent); }
+  .ice-val.failed { background: rgba(255,68,68,0.15); color: var(--red); }
+
+  /* Fullscreen btn */
+  #fullscreen-btn {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    z-index: 10;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 16px;
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.2s;
+  }
+  #fullscreen-btn:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon"></div>
+    SECUREFEED
+  </div>
+  <div class="header-right">
+    <span>CAM-01 / HOME</span>
+    <span id="clock">00:00:00</span>
+  </div>
+</header>
+
+<div class="status-bar">
+  <div class="status-dot" id="status-dot"></div>
+  <span id="status-text">CHECKING SERVER...</span>
+  <span id="status-detail"></span>
+</div>
+
+<main>
+  <div class="video-section">
+    <div class="feed-label">
+      <span>LIVE FEED</span>
+      <span class="rec-badge" id="rec-badge">● REC</span>
+    </div>
+
+    <div class="video-wrapper">
+      <div class="corner tl"></div>
+      <div class="corner tr"></div>
+      <div class="corner bl"></div>
+      <div class="corner br"></div>
+
+      <video id="video" autoplay playsinline muted></video>
+
+      <div class="offline-overlay" id="offline-overlay">
+        <div class="offline-icon">📷</div>
+        <div class="offline-text">
+          NO SIGNAL<br>
+          <span style="font-size:10px">HOME SERVER OFFLINE OR NOT CONNECTED</span>
+        </div>
+        <button id="connect-btn" onclick="startConnection()">CONNECT</button>
+      </div>
+
+      <button id="fullscreen-btn" onclick="toggleFullscreen()" title="Fullscreen">⛶</button>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-label">CONNECTION</div>
+        <div class="stat-value" id="stat-conn">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">ICE STATE</div>
+        <div class="stat-value" id="stat-ice">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">LATENCY</div>
+        <div class="stat-value" id="stat-latency">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">BYTES RX</div>
+        <div class="stat-value" id="stat-bytes">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="section-title">ICE / NAT STATUS</div>
+      <div class="ice-states">
+        <div class="ice-item">
+          <span class="ice-label">Signaling</span>
+          <span class="ice-val" id="ice-signaling">IDLE</span>
+        </div>
+        <div class="ice-item">
+          <span class="ice-label">Gathering</span>
+          <span class="ice-val" id="ice-gathering">—</span>
+        </div>
+        <div class="ice-item">
+          <span class="ice-label">Connection</span>
+          <span class="ice-val" id="ice-connection">—</span>
+        </div>
+        <div class="ice-item">
+          <span class="ice-label">Pair Type</span>
+          <span class="ice-val" id="ice-type">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title" style="padding: 12px 16px 0;">EVENT LOG</div>
+    <div class="log-terminal" id="log"></div>
+  </div>
+</main>
+
+<script>
+// ── Config — set your Vercel URL here ──────────────────────────────────────
+const VERCEL_URL = window.location.origin; // auto-detect if same origin
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  // Uncomment and fill with Metered.ca free TURN creds if P2P fails:
+  // { urls: "turn:standard.relay.metered.ca:80",
+  //   username: "YOUR_USER", credential: "YOUR_CRED" },
+];
+
+// ── State ──────────────────────────────────────────────────────────────────
+let pc = null;
+let sessionId = null;
+let pollTimer = null;
+let statsTimer = null;
+let serverOnline = false;
+
+// ── Clock ──────────────────────────────────────────────────────────────────
+function updateClock() {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('en-GB', { hour12: false });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Logging ────────────────────────────────────────────────────────────────
+function log(msg, type = 'info') {
+  const container = document.getElementById('log');
+  const t = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-time">${t}</span><span class="log-msg ${type}">${msg}</span>`;
+  container.appendChild(entry);
+  container.scrollTop = container.scrollHeight;
+  // Keep max 100 entries
+  while (container.children.length > 100) container.removeChild(container.firstChild);
+}
+
+// ── Status bar ─────────────────────────────────────────────────────────────
+function setStatus(text, detail, state) {
+  document.getElementById('status-text').textContent = text;
+  document.getElementById('status-detail').textContent = detail || '';
+  const dot = document.getElementById('status-dot');
+  dot.className = 'status-dot ' + (state || '');
+}
+
+// ── ICE indicator ──────────────────────────────────────────────────────────
+function setIce(id, val, active) {
+  const el = document.getElementById(id);
+  el.textContent = val;
+  el.className = 'ice-val' + (active ? ' active' : val === 'FAILED' ? ' failed' : '');
+}
+
+// ── Server status polling ──────────────────────────────────────────────────
+async function checkServer() {
+  try {
+    const r = await fetch(`${VERCEL_URL}/api/status`);
+    const d = await r.json();
+    serverOnline = d.online;
+    if (d.online) {
+      setStatus('HOME SERVER ONLINE', `last seen ${d.seconds_ago}s ago`, 'online');
+      document.getElementById('connect-btn').disabled = false;
+    } else {
+      setStatus('HOME SERVER OFFLINE', d.last_seen ? `last seen ${d.seconds_ago}s ago` : 'never seen', 'offline');
+      document.getElementById('connect-btn').disabled = true;
+    }
+  } catch {
+    setStatus('VERCEL UNREACHABLE', '', 'offline');
+  }
+}
+checkServer();
+setInterval(checkServer, 10000);
+
+// ── Start WebRTC connection ────────────────────────────────────────────────
+async function startConnection() {
+  if (pc) { pc.close(); pc = null; }
+
+  sessionId = crypto.randomUUID();
+  log(`Starting session ${sessionId.slice(0,8)}...`, 'info');
+  setIce('ice-signaling', 'CONNECTING', true);
+
+  pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+  // Receive video
+  pc.ontrack = (e) => {
+    log('Track received: ' + e.track.kind, 'ok');
+    const video = document.getElementById('video');
+    if (e.streams[0]) {
+      video.srcObject = e.streams[0];
+      video.play().catch(() => {});
+      document.getElementById('offline-overlay').classList.add('hidden');
+      document.getElementById('rec-badge').classList.add('active');
+      log('🎥 Stream live!', 'ok');
+      setStatus('STREAMING', 'WebRTC connected', 'online');
+      startStatsPolling();
+    }
+  };
+
+  // ICE candidates
+  pc.onicecandidate = async (e) => {
+    if (e.candidate) {
+      log(`ICE cand: ${e.candidate.type}`, 'info');
+      try {
+        await fetch(`${VERCEL_URL}/api/ice`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: sessionId,
+            role: 'viewer',
+            candidate: {
+              candidate: e.candidate.candidate,
+              sdpMid: e.candidate.sdpMid,
+              sdpMLineIndex: e.candidate.sdpMLineIndex,
+            }
+          })
+        });
+      } catch {}
+    }
+  };
+
+  pc.onicegatheringstatechange = () => {
+    setIce('ice-gathering', pc.iceGatheringState.toUpperCase(),
+      pc.iceGatheringState === 'complete');
+    log(`ICE gathering: ${pc.iceGatheringState}`, 'info');
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    const s = pc.iceConnectionState;
+    setIce('ice-connection', s.toUpperCase(), s === 'connected' || s === 'completed');
+    document.getElementById('stat-ice').textContent = s.toUpperCase();
+    document.getElementById('stat-ice').className =
+      'stat-value' + (s === 'connected' || s === 'completed' ? '' :
+                      s === 'failed' ? ' bad' : ' warn');
+    if (s === 'failed') log('ICE failed — try adding TURN server', 'error');
+  };
+
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    setIce('ice-signaling', s.toUpperCase(), s === 'connected');
+    document.getElementById('stat-conn').textContent = s.toUpperCase();
+    log(`Connection: ${s}`, s === 'connected' ? 'ok' : s === 'failed' ? 'error' : 'info');
+    if (s === 'failed' || s === 'closed') {
+      document.getElementById('offline-overlay').classList.remove('hidden');
+      document.getElementById('rec-badge').classList.remove('active');
+      stopStatsPolling();
+    }
+  };
+
+  // We need at least one transceiver to get video back
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+
+  // Create offer
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  log('SDP offer created', 'info');
+
+  // Post offer to Vercel
+  const r = await fetch(`${VERCEL_URL}/api/offer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, offer: offer.sdp })
+  });
+
+  const d = await r.json();
+  if (d.error) { log('Offer error: ' + d.error, 'error'); return; }
+  log('Offer sent to Vercel ✓', 'ok');
+  setStatus('WAITING FOR HOME SERVER...', 'polling for answer', 'connecting');
+
+  // Poll for answer
+  pollTimer = setInterval(pollForAnswer, 1500);
+  // Also poll for server ICE candidates
+  setTimeout(pollServerICE, 3000);
+}
+
+let pollCount = 0;
+async function pollForAnswer() {
+  pollCount++;
+  if (pollCount > 40) { // 60s timeout
+    clearInterval(pollTimer);
+    log('Timeout waiting for answer', 'error');
+    setStatus('TIMEOUT', 'Home server did not respond', 'offline');
+    return;
+  }
+  try {
+    const r = await fetch(`${VERCEL_URL}/api/answer?session_id=${sessionId}`);
+    const d = await r.json();
+    if (d.answer) {
+      clearInterval(pollTimer);
+      pollCount = 0;
+      log('Answer received ✓', 'ok');
+      await pc.setRemoteDescription({ type: 'answer', sdp: d.answer });
+      setStatus('NEGOTIATING...', 'ICE connecting', 'connecting');
+      setIce('ice-signaling', 'ANSWERED', true);
+
+      // Add any ICE candidates that came with the answer
+      for (const c of d.ice_candidates || []) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(c));
+        } catch {}
+      }
+    }
+  } catch (e) {
+    log('Poll error: ' + e.message, 'warn');
+  }
+}
+
+let knownServerICE = new Set();
+async function pollServerICE() {
+  if (!pc || !sessionId) return;
+  try {
+    const r = await fetch(`${VERCEL_URL}/api/ice?session_id=${sessionId}&role=viewer`);
+    const d = await r.json();
+    for (const c of d.candidates || []) {
+      const key = c.candidate;
+      if (!knownServerICE.has(key)) {
+        knownServerICE.add(key);
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(c));
+          log(`Server ICE: ${c.candidate.split(' ')[7] || 'candidate'}`, 'info');
+        } catch {}
+      }
+    }
+  } catch {}
+  if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'closed') {
+    setTimeout(pollServerICE, 2000);
+  }
+}
+
+// ── WebRTC stats ───────────────────────────────────────────────────────────
+function startStatsPolling() {
+  statsTimer = setInterval(async () => {
+    if (!pc) return;
+    const stats = await pc.getStats();
+    stats.forEach(s => {
+      if (s.type === 'inbound-rtp' && s.mediaType === 'video') {
+        const mb = ((s.bytesReceived || 0) / 1024 / 1024).toFixed(1);
+        document.getElementById('stat-bytes').textContent = mb + ' MB';
+      }
+      if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.nominated) {
+        const rtt = s.currentRoundTripTime ? Math.round(s.currentRoundTripTime * 1000) : '—';
+        document.getElementById('stat-latency').textContent = rtt + (rtt !== '—' ? 'ms' : '');
+        document.getElementById('stat-latency').className =
+          'stat-value' + (rtt > 200 ? ' warn' : rtt > 500 ? ' bad' : '');
+      }
+      if (s.type === 'remote-candidate') {
+        const t = s.candidateType;
+        document.getElementById('stat-conn').textContent = t ? t.toUpperCase() : '—';
+        setIce('ice-type', t ? t.toUpperCase() : '—', t === 'relay' || t === 'srflx');
+      }
+    });
+  }, 3000);
+}
+
+function stopStatsPolling() {
+  clearInterval(statsTimer);
+  statsTimer = null;
+}
+
+// ── Fullscreen ────────────────────────────────────────────────────────────
+function toggleFullscreen() {
+  const wrapper = document.querySelector('.video-wrapper');
+  if (!document.fullscreenElement) wrapper.requestFullscreen();
+  else document.exitFullscreen();
+}
+</script>
+</body>
+</html>
