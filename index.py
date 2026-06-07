@@ -7,10 +7,13 @@ Bundled ICE model: no separate /api/ice polling needed.
   Viewer  → GET  /api/answer  → { answer, ice: [...] }
   Server  → POST /api/register (heartbeat)
   All     → GET  /api/status
+  All     → GET  /api/turn    → iceServers array with live TURN credentials
 """
 import json
 import os
 import time
+import urllib.request
+import urllib.error
 
 from jinja2 import Environment, BaseLoader
 from starlette.applications import Starlette
@@ -19,8 +22,12 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 
 # ── Config ────────────────────────────────────────────────────────────────────
-SECRET     = os.environ.get("SERVER_SECRET", "test123")
-STORE_PATH = "/tmp/webrtc_store.json"
+SECRET          = os.environ.get("SERVER_SECRET", "test123")
+
+METERED_API_KEY = os.environ.get("METERED_API_KEY", "bdb349d8bf423ddc69f86dc3501c3422c043")
+STORE_PATH      = "/tmp/webrtc_store.json"
+TURN_CACHE_PATH = "/tmp/webrtc_turn_cache.json"
+TURN_CACHE_TTL  = 3600  # seconds — refresh credentials every hour
 
 # ── Jinja2 ────────────────────────────────────────────────────────────────────
 _HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
@@ -49,10 +56,69 @@ def save_store(data: dict) -> None:
 def _ok(**kw):       return JSONResponse({"status": "ok", **kw})
 def _err(msg, code): return JSONResponse({"error": msg}, status_code=code)
 
+# ── TURN credential helpers ───────────────────────────────────────────────────
+_FALLBACK_ICE = [
+    {"urls": "stun:stun.l.google.com:19302"},
+    {"urls": "stun:stun1.l.google.com:19302"},
+]
+
+def _load_turn_cache() -> dict | None:
+    try:
+        with open(TURN_CACHE_PATH) as f:
+            data = json.load(f)
+        if time.time() - data.get("ts", 0) < TURN_CACHE_TTL:
+            return data
+    except Exception:
+        pass
+    return None
+
+def _save_turn_cache(ice_servers: list) -> None:
+    try:
+        with open(TURN_CACHE_PATH, "w") as f:
+            json.dump({"ts": time.time(), "ice_servers": ice_servers}, f)
+    except Exception:
+        pass
+
+def _fetch_metered_credentials() -> list:
+    """Fetch fresh TURN credentials from Metered API."""
+    # Try account-specific endpoint first, fall back to openrelay
+    endpoints = []
+    if METERED_API_KEY:
+        endpoints.append(
+            f"https://ihraren.metered.live/api/v1/turn/credentials?apiKey={METERED_API_KEY}"
+        )
+    # openrelay.metered.ca is a free public TURN — no key needed
+    endpoints.append(
+        "https://openrelay.metered.ca/api/v1/turn/credentials?apiKey=openrelayproject"
+    )
+    for url in endpoints:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+            if isinstance(data, list) and data:
+                return data
+        except Exception:
+            continue
+    return _FALLBACK_ICE
+
+def get_ice_servers() -> list:
+    """Return cached TURN credentials, refreshing if stale."""
+    cached = _load_turn_cache()
+    if cached:
+        return cached["ice_servers"]
+    ice = _fetch_metered_credentials()
+    _save_turn_cache(ice)
+    return ice
+
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
 async def index(request: Request):
     return HTMLResponse(_template.render())
+
+
+async def api_turn(request: Request):
+    """Return iceServers array — viewer and home_server both call this."""
+    return JSONResponse({"iceServers": get_ice_servers()})
 
 
 async def api_status(request: Request):
@@ -76,7 +142,6 @@ async def api_register(request: Request):
 
 async def api_offer(request: Request):
     if request.method == "GET":
-        # home_server polls — must supply secret
         if request.query_params.get("secret") != SECRET:
             return _err("forbidden", 403)
         store = load_store()
@@ -87,16 +152,14 @@ async def api_offer(request: Request):
         ]
         return JSONResponse({"pending": pending})
 
-    # POST — viewer submits offer + all its ICE candidates bundled
     body = await request.json()
-    sid  = body.get("session_id")
-    offer = body.get("offer")
+    sid, offer = body.get("session_id"), body.get("offer")
     if not sid or not offer:
         return _err("missing session_id or offer", 400)
     store = load_store()
     store["sessions"][sid] = {
         "offer":      offer,
-        "viewer_ice": body.get("ice", []),   # bundled viewer ICE
+        "viewer_ice": body.get("ice", []),
         "answer":     None,
         "server_ice": [],
     }
@@ -106,7 +169,6 @@ async def api_offer(request: Request):
 
 async def api_answer(request: Request):
     if request.method == "GET":
-        # viewer polls for answer
         sid = request.query_params.get("session_id")
         store = load_store()
         if not sid or sid not in store["sessions"]:
@@ -114,7 +176,6 @@ async def api_answer(request: Request):
         s = store["sessions"][sid]
         return JSONResponse({"answer": s.get("answer"), "ice": s.get("server_ice", [])})
 
-    # POST — home_server submits answer + its ICE candidates bundled
     body = await request.json()
     if body.get("secret") != SECRET:
         return _err("forbidden", 403)
@@ -158,6 +219,7 @@ class CORSMiddleware:
 # ── App ───────────────────────────────────────────────────────────────────────
 _starlette = Starlette(routes=[
     Route("/",             index,        methods=["GET"]),
+    Route("/api/turn",     api_turn,     methods=["GET"]),
     Route("/api/status",   api_status,   methods=["GET"]),
     Route("/api/register", api_register, methods=["POST"]),
     Route("/api/offer",    api_offer,    methods=["GET", "POST"]),
