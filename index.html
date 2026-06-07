@@ -542,14 +542,24 @@
 <script>
 // ── Config — set your Vercel URL here ──────────────────────────────────────
 const VERCEL_URL = window.location.origin; // auto-detect if same origin
-const ICE_SERVERS = [
+const _ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   // Uncomment and fill with Metered.ca free TURN creds if P2P fails:
   // { urls: "turn:standard.relay.metered.ca:80",
   //   username: "YOUR_USER", credential: "YOUR_CRED" },
 ];
-
+const ICE_SERVERS = [
+    {"urls": "stun:stun.l.google.com:19302"},
+    {"urls": "turn:standard.relay.metered.ca:80",
+     "username": "ihraren", "credential": "pKGZ7CWCpSZ8Lyf5wLe8fJuDA7lzIhnDXwvO-qJBP_dlNMNR"},
+    {"urls": "turn:standard.relay.metered.ca:80?transport=tcp",
+     "username": "ihraren", "credential": "pKGZ7CWCpSZ8Lyf5wLe8fJuDA7lzIhnDXwvO-qJBP_dlNMNR"},
+    {"urls": "turns:standard.relay.metered.ca:443",
+     "username": "ihraren", "credential": "pKGZ7CWCpSZ8Lyf5wLe8fJuDA7lzIhnDXwvO-qJBP_dlNMNR"},
+    {"urls": "turns:standard.relay.metered.ca:443?transport=tcp",
+     "username": "ihraren", "credential": "pKGZ7CWCpSZ8Lyf5wLe8fJuDA7lzIhnDXwvO-qJBP_dlNMNR"},
+]
 // ── State ──────────────────────────────────────────────────────────────────
 let pc = null;
 let sessionId = null;
