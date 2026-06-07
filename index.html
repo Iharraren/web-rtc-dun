@@ -614,12 +614,15 @@ checkServer();
 setInterval(checkServer, 10000);
 
 // ── Start WebRTC connection ────────────────────────────────────────────────
+// Bundled ICE model: gather ALL ICE candidates locally first, then send
+// them together with the offer in one POST. home_server does the same with
+// the answer. This avoids race conditions on Vercel's stateless /tmp store.
 async function startConnection() {
   if (pc) { pc.close(); pc = null; }
 
   sessionId = crypto.randomUUID();
   log(`Starting session ${sessionId.slice(0,8)}...`, 'info');
-  setIce('ice-signaling', 'CONNECTING', true);
+  setIce('ice-signaling', 'GATHERING', true);
 
   pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
@@ -638,25 +641,16 @@ async function startConnection() {
     }
   };
 
-  // ICE candidates
-  pc.onicecandidate = async (e) => {
+  // Collect candidates locally — don't POST them individually
+  const localIce = [];
+  pc.onicecandidate = (e) => {
     if (e.candidate) {
       log(`ICE cand: ${e.candidate.type}`, 'info');
-      try {
-        await fetch(`${VERCEL_URL}/api/ice`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            session_id: sessionId,
-            role: 'viewer',
-            candidate: {
-              candidate: e.candidate.candidate,
-              sdpMid: e.candidate.sdpMid,
-              sdpMLineIndex: e.candidate.sdpMLineIndex,
-            }
-          })
-        });
-      } catch {}
+      localIce.push({
+        candidate:     e.candidate.candidate,
+        sdpMid:        e.candidate.sdpMid,
+        sdpMLineIndex: e.candidate.sdpMLineIndex,
+      });
     }
   };
 
@@ -688,37 +682,47 @@ async function startConnection() {
     }
   };
 
-  // We need at least one transceiver to get video back
   pc.addTransceiver('video', { direction: 'recvonly' });
   pc.addTransceiver('audio', { direction: 'recvonly' });
 
-  // Create offer
+  // Create offer and wait for ICE gathering to complete before sending
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  log('SDP offer created', 'info');
+  log('SDP offer created — gathering ICE...', 'info');
 
-  // Post offer to Vercel
-  const r = await fetch(`${VERCEL_URL}/api/offer`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, offer: offer.sdp })
+  // Wait for gathering to complete (or 8s timeout)
+  await new Promise(resolve => {
+    if (pc.iceGatheringState === 'complete') { resolve(); return; }
+    const done = () => { if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', done); resolve(); } };
+    pc.addEventListener('icegatheringstatechange', done);
+    setTimeout(resolve, 8000);
   });
 
-  const d = await r.json();
-  if (d.error) { log('Offer error: ' + d.error, 'error'); return; }
-  log('Offer sent to Vercel ✓', 'ok');
-  setStatus('WAITING FOR HOME SERVER...', 'polling for answer', 'connecting');
+  log(`Sending offer + ${localIce.length} ICE candidates`, 'info');
 
-  // Poll for answer
+  // Post offer + all ICE in one shot
+  try {
+    const r = await fetch(`${VERCEL_URL}/api/offer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, offer: pc.localDescription.sdp, ice: localIce })
+    });
+    const d = await r.json();
+    if (d.error) { log('Offer error: ' + d.error, 'error'); return; }
+    log('Offer + ICE sent to Vercel ✓', 'ok');
+  } catch (e) {
+    log('Offer send failed: ' + e.message, 'error'); return;
+  }
+
+  setStatus('WAITING FOR HOME SERVER...', 'polling for answer', 'connecting');
+  pollCount = 0;
   pollTimer = setInterval(pollForAnswer, 1500);
-  // Also poll for server ICE candidates
-  setTimeout(pollServerICE, 3000);
 }
 
 let pollCount = 0;
 async function pollForAnswer() {
   pollCount++;
-  if (pollCount > 40) { // 60s timeout
+  if (pollCount > 40) {
     clearInterval(pollTimer);
     log('Timeout waiting for answer', 'error');
     setStatus('TIMEOUT', 'Home server did not respond', 'offline');
@@ -734,38 +738,14 @@ async function pollForAnswer() {
       await pc.setRemoteDescription({ type: 'answer', sdp: d.answer });
       setStatus('NEGOTIATING...', 'ICE connecting', 'connecting');
       setIce('ice-signaling', 'ANSWERED', true);
-
-      // Add any ICE candidates that came with the answer
-      for (const c of d.ice_candidates || []) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(c));
-        } catch {}
+      // Apply all server ICE candidates bundled with the answer
+      for (const c of d.ice || []) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
       }
+      log(`Applied ${(d.ice || []).length} server ICE candidates`, 'info');
     }
   } catch (e) {
     log('Poll error: ' + e.message, 'warn');
-  }
-}
-
-let knownServerICE = new Set();
-async function pollServerICE() {
-  if (!pc || !sessionId) return;
-  try {
-    const r = await fetch(`${VERCEL_URL}/api/ice?session_id=${sessionId}&role=viewer`);
-    const d = await r.json();
-    for (const c of d.candidates || []) {
-      const key = c.candidate;
-      if (!knownServerICE.has(key)) {
-        knownServerICE.add(key);
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(c));
-          log(`Server ICE: ${c.candidate.split(' ')[7] || 'candidate'}`, 'info');
-        } catch {}
-      }
-    }
-  } catch {}
-  if (pc && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'closed') {
-    setTimeout(pollServerICE, 2000);
   }
 }
 
